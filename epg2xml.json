@@ -1,0 +1,11 @@
+{
+    "MyISP": "KT",
+    "output": "d",
+    "default_icon_url": "",
+    "default_rebroadcast": "y",
+    "default_episode" : "n",
+    "default_verbose" : "n",
+    "default_fetch_limit" : "2",
+    "default_xml_file" : "xmltv.xml",
+    "default_xml_socket" : "xmltv.sock"
+}
