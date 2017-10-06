@@ -1,0 +1,12 @@
+[Unit]
+Description=Run epg2xml
+
+[Service]
+Type=oneshot
+ExecStart=/home/hts/epg2xml.py
+User=hts
+Group=video
+
+
+[Install]
+WantedBy=multi-user.target
