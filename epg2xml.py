@@ -1,74 +1,116 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-
 from __future__ import print_function
+import imp
 import os
 import sys
-import requests
 import json
+import locale
 import datetime
-from bs4 import BeautifulSoup, SoupStrainer
 import codecs
 import socket
 import re
 from xml.sax.saxutils import escape, unescape
 import argparse
 import pprint
+from functools import partial
+import time
 import importlib
 
-__version__ = '1.1.6'
+try:
+    imp.find_module('bs4')
+    from bs4 import BeautifulSoup, SoupStrainer
+except ImportError:
+    print("Error : ", "BeautifulSoup 모듈이 설치되지 않았습니다.", file=sys.stderr)
+    sys.exit()
+try:
+    imp.find_module('lxml')
+    from lxml import html
+except ImportError:
+    print("Error : ", "lxml 모듈이 설치되지 않았습니다.", file=sys.stderr)
+    sys.exit()
+try:
+    imp.find_module('requests')
+    import requests
+except ImportError:
+    print("Error : ", "requests 모듈이 설치되지 않았습니다.", file=sys.stderr)
+    sys.exit()
 
+
+#importlib.reload(sys)
+#sys.setdefaultencoding('utf-8')
+
+__version__ = '1.2.2p3'
+
+'''
+if not sys.version_info[:2] == (2, 7):
+    print("Error : ", "python 2.7 버전이 필요합니다.", file=sys.stderr)
+    sys.exit()
+'''
 # Set variable
 debug = False
 today = datetime.date.today()
 ua = {'User-Agent': 'Mozilla/5.0 (Windows NT 6.3; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/53.0.2785.116 Safari/537.36', 'accept': '*/*'}
-CHANNEL_ERROR = 'Invalid Channel'
-CONTENT_ERROR = 'Invalid EPG'
-HTTP_ERROR = 'EPG Retrieving error'
-SOCKET_ERROR = 'xmltv.sock not found'
-JSON_FILE_ERROR = 'json not found'
-JSON_SYNTAX_ERROR = 'Invalid json'
+timeout = 5
+CHANNEL_ERROR = ' 존재하지 않는 채널입니다.'
+CONTENT_ERROR = ' EPG 정보가 없습니다.'
+HTTP_ERROR = ' EPG 정보를 가져오는데 문제가 있습니다.'
+SOCKET_ERROR = 'xmltv.sock 파일을 찾을 수 없습니다.'
+JSON_FILE_ERROR = 'json 파일을 읽을 수 없습니다.'
+JSON_SYNTAX_ERROR = 'json 파일 형식이 잘못되었습니다.'
 
 # Get epg data
 def getEpg():
     Channelfile = os.path.dirname(os.path.abspath(__file__)) + '/Channel.json'
     ChannelInfos = []
     try:
-        with open(Channelfile, encoding='utf8') as f: # Read Channel Information file
-            Channeldatas = json.load(f)
+        with open(Channelfile) as f: # Read Channel Information file
+            Channeldatajson = json.load(f)
     except EnvironmentError:
         printError("Channel." + JSON_FILE_ERROR)
         sys.exit()
-    except ValueError as e:
-        printError(e)
+    except ValueError:
         printError("Channel." + JSON_SYNTAX_ERROR)
         sys.exit()
-
     print('<?xml version="1.0" encoding="UTF-8"?>')
     print('<!DOCTYPE tv SYSTEM "xmltv.dtd">\n')
     print('<tv generator-info-name="epg2xml ' + __version__ + '">')
+# My Channel 정의
+    MyChannelInfo = []
+    if MyChannels :
+        for MyChannel in MyChannels.split(','):
+            MyChannelInfo.append(int(MyChannel.strip()))
 
-    for Channeldata in Channeldatas: #Get Channel & Print Channel info
-        if Channeldata['Enabled'] == 1:
+    for Channeldata in Channeldatajson: #Get Channel & Print Channel info
+        if Channeldata['Enabled'] == 1 or Channeldata['Id'] in MyChannelInfo:
             ChannelId = Channeldata['Id']
             ChannelName = escape(Channeldata['Name'])
             ChannelSource = Channeldata['Source']
             ChannelServiceId = Channeldata['ServiceId']
             ChannelIconUrl = escape(Channeldata['Icon_url'])
-            ChannelInfos.append([ChannelId,  ChannelName, ChannelSource, ChannelServiceId])
-            print('  <channel id="%s">' % (ChannelId))
-            print('    <display-name>{0}</display-name>'.format(ChannelName))
             if MyISP != "ALL" and Channeldata[MyISP+'Ch'] is not None:
+                ChannelInfos.append([ChannelId,  ChannelName, ChannelSource, ChannelServiceId])
                 ChannelNumber = str(Channeldata[MyISP+'Ch']);
                 ChannelISPName = escape(Channeldata[MyISP+' Name'])
+                print('  <channel id="%s">' % (ChannelId))
+                print('    <display-name>%s</display-name>' % (ChannelName))
                 print('    <display-name>%s</display-name>' % (ChannelISPName))
                 print('    <display-name>%s</display-name>' % (ChannelNumber))
                 print('    <display-name>%s</display-name>' % (ChannelNumber+' '+ChannelISPName))
-            if IconUrl:
-                print('    <icon src="%s/%s.png" />' % (IconUrl, ChannelId))
-            else :
-                print('    <icon src="%s" />' % (ChannelIconUrl))
-            print('  </channel>')
+                if IconUrl:
+                    print('    <icon src="%s/%s.png" />' % (IconUrl, ChannelId))
+                else :
+                    print('    <icon src="%s" />' % (ChannelIconUrl))
+                print('  </channel>')
+            elif MyISP == "ALL":
+                ChannelInfos.append([ChannelId,  ChannelName, ChannelSource, ChannelServiceId])
+                print('  <channel id="%s">' % (ChannelId))
+                print('    <display-name>%s</display-name>' % (ChannelName))
+                if IconUrl:
+                    print('    <icon src="%s/%s.png" />' % (IconUrl, ChannelId))
+                else :
+                    print('    <icon src="%s" />' % (ChannelIconUrl))
+                print('  </channel>')
 
     # Print Program Information
     for ChannelInfo in ChannelInfos:
@@ -85,10 +127,28 @@ def getEpg():
             GetEPGFromLG(ChannelInfo)
         elif ChannelSource == 'SK':
             GetEPGFromSK(ChannelInfo)
+        elif ChannelSource == 'SKB':
+            GetEPGFromSKB(ChannelInfo)
         elif ChannelSource == 'SKY':
             GetEPGFromSKY(ChannelInfo)
         elif ChannelSource == 'NAVER':
             GetEPGFromNaver(ChannelInfo)
+        elif ChannelSource == 'ISCS':
+            GetEPGFromIscs(ChannelInfo)
+        elif ChannelSource == 'HCN':
+            GetEPGFromHcn(ChannelInfo)
+        elif ChannelSource == 'POOQ':
+            GetEPGFromPooq(ChannelInfo)
+        elif ChannelSource == 'MBC':
+            GetEPGFromMbc(ChannelInfo)
+        elif ChannelSource == 'MIL':
+            GetEPGFromMil(ChannelInfo)
+        elif ChannelSource == 'IFM':
+            GetEPGFromIfm(ChannelInfo)
+        elif ChannelSource == 'KBS':
+            GetEPGFromKbs(ChannelInfo)
+        elif ChannelSource == 'ARIRANG':
+            GetEPGFromArirang(ChannelInfo)
     print('</tv>')
 
 # Get EPG data from epg.co.kr
@@ -96,178 +156,159 @@ def GetEPGFromEPG(ChannelInfo):
     ChannelId = ChannelInfo[0]
     ChannelName = ChannelInfo[1]
     ServiceId =  ChannelInfo[3]
-    url = 'http://www.epg.co.kr/epg-cgi/extern/cnm_guide_type_v070530.cgi'
+    epginfo = []
+    url = 'http://211.43.210.10:88/epg-cgi/extern/cnm_guide_type_v070530.php'
     for k in range(period):
         day = today + datetime.timedelta(days=k)
-        params = {'beforegroup':'100', 'checkchannel':ServiceId, 'select_group':'100', 'start_date':day.strftime('%Y%m%d')}
-        epginfo = []
+        params = {'beforegroup':'100', 'checkchannel[]':ServiceId, 'select_group':'100', 'start_date':day.strftime('%Y%m%d')}
         try:
-            response = requests.post(url, data=params, headers=ua)
+            response = requests.post(url, data=params, headers=ua, timeout=timeout)
             response.raise_for_status()
             html_data = response.content
-            data = html_data.decode('euc-kr')
-            #data = unicode(html_data, 'euc-kr', 'ignore').encode('utf-8', 'ignore')
+            data = unicode(html_data, 'euc-kr', 'ignore').encode('utf-8', 'ignore')
+            pattern = '<td height="25" valign=top >(.*)<\/td>'
+            data = re.sub(pattern, partial(replacement, tag='td'), data)
             strainer = SoupStrainer('table', {'style':'margin-bottom:30'})
             soup = BeautifulSoup(data, 'lxml', parse_only=strainer, from_encoding='utf-8')
-            tables = soup.find_all('table', {'style':'margin-bottom:30'})
-
-            for i in range(1,4):
-                thisday = day
-                row = tables[i].find_all('td', {'colspan':'2'})
-                for j, cell in enumerate(row):
-                    hour = int(cell.text.strip().strip('시'))
-                    if(i == 1) : hour = 'AM ' + str(hour)
-                    elif(i == 2) : hour = 'PM ' + str(hour)
-                    elif(i == 3 and hour > 5) : hour = 'PM ' + str(hour)
-                    elif(i == 3 and hour < 5) :
-                        hour = 'AM ' + str(hour)
-                        thisday = day + datetime.timedelta(days=1)
-                    for celldata in cell.parent.find_all('tr'):
-                        pattern = "<tr>.*\[(.*)\]<\/td>\s.*\">(.*?)\s*(&lt;(.*)&gt;)?\s*(\(재\))?\s*(\(([\d,]+)회\))?(<img.*?)?(<\/a>)?\s*<\/td><\/tr>"
-                        matches = re.match(pattern, str(celldata))
-                        if not (matches is None):
-                            minute = matches.group(1) if matches.group(1) else ''
-                            startTime = str(thisday) + ' ' + hour + ':' + minute
-                            startTime = datetime.datetime.strptime(startTime, '%Y-%m-%d %p %I:%M')
-                            startTime = startTime.strftime('%Y%m%d%H%M%S')
-                            image = matches.group(8) if matches.group(8) else ''
-                            grade = re.match('.*schedule_([\d,]+)?.*',image)
-                            if not (grade is None): rating = int(grade.group(1))
-                            else : rating = 0
-                            programName = matches.group(2).strip() if matches.group(2) else ''
-                            subprogramName = matches.group(4).strip() if matches.group(4) else ''
-                            #programName, startTime, rating, subprogramName, rebroadcast, episode
-                            epginfo.append([programName, startTime, rating, subprogramName, matches.group(5), matches.group(7)])
-
-            for epg1, epg2 in zip(epginfo, epginfo[1:]):
-                programName = epg1[0] if epg1[0] else ''
-                subprogramName = epg1[3] if epg1[3] else ''
-                startTime = epg1[1] if epg1[1] else ''
-                endTime = epg2[1] if epg2[1] else ''
-                desc = ''
-                actors = ''
-                producers = ''
-                category = ''
-                rebroadcast = True if epg1[4] else False
-                episode = epg1[5] if epg1[5] else ''
-                rating = int(epg1[2]) if epg1[2] else 0
-                programdata = {'channelId':ChannelId, 'startTime':startTime, 'endTime':endTime, 'programName':programName, 'subprogramName':subprogramName, 'desc':desc, 'actors':actors, 'producers':producers, 'category':category, 'episode':episode, 'rebroadcast':rebroadcast, 'rating':rating}
-                writeProgram(programdata)
-        except requests.exceptions.HTTPError:
-            if(debug): printError(ChannelName + HTTP_ERROR)
-            else: pass
+            html = soup.find_all('table', {'style':'margin-bottom:30'})
+            if(html):
+                for i in range(1,4):
+                    thisday = day
+                    row = html[i].find_all('td', {'colspan':'2'})
+                    for cell in row:
+                        hour = int(cell.text.strip().strip('시'))
+                        if(i == 1) : hour = 'AM ' + str(hour)
+                        elif(i == 2) : hour = 'PM ' + str(hour)
+                        elif(i == 3 and hour > 5 and hour < 12 ) : hour = 'PM ' + str(hour)
+                        elif(i == 3 and (hour < 5 or hour == 12)) :
+                            hour = 'AM ' + str(hour)
+                            thisday = day + datetime.timedelta(days=1)
+                        for celldata in cell.parent.find_all('tr'):
+                            celldata = str(celldata).replace('&lt;/b&gt;&lt;/a&gt;','').replace('&lt;/b&gt;','')
+                            celldata = celldata.replace('&lt;img','<img').replace('valign=top&gt;','>').replace('align=absmiddle&gt;','>').replace('&lt;/a&gt;','</a>')
+                            startTime = endTime = programName = subprogramName = desc = actors = producers = category = episode = ''
+                            rebroadcast = False
+                            rating = 0
+                            pattern = "<tr>.*\[(.*)\]<\/td>\s.*\">(.*?)\s*(&lt;(.*)&gt;)?\s*(\(재\))?\s*(\(([\d,]+)회\)?)?(<img.*?)?(<\/a>)?\s*<\/td><\/tr>"
+                            matches = re.match(pattern, str(celldata))
+                            if not (matches is None):
+                                minute = matches.group(1) if matches.group(1) else ''
+                                startTime = str(thisday) + ' ' + hour + ':' + minute[-2:]
+                                startTime = datetime.datetime.strptime(startTime, '%Y-%m-%d %p %I:%M')
+                                startTime = startTime.strftime('%Y%m%d%H%M%S')
+                                image = matches.group(8) if matches.group(8) else ''
+                                grade = re.match('.*schedule_([\d,]+)?.*',image)
+                                if not (grade is None): rating = int(grade.group(1))
+                                programName = matches.group(2).strip() if matches.group(2) else ''
+                                programName = unescape(programName)
+                                subprogramName = matches.group(4).strip() if matches.group(4) else ''
+                                subprogramName = unescape(subprogramName)
+                                rebroadcast = True if matches.group(5) else False;
+                                episode = matches.group(7) if matches.group(7) else ''
+                            #ChannelId, startTime, programName, subprogramName, desc, actors, producers, category, episode, rebroadcast, rating
+                            epginfo.append([ChannelId, startTime, programName, subprogramName, desc, actors, producers, category, episode, rebroadcast, rating])
+                            time.sleep(0.001)
+            else:
+                if(debug): printError(ChannelName + CONTENT_ERROR)
+                else: pass
+        except (requests.exceptions.RequestException) as e:
+            if(debug): printError(ChannelName + str(e))
+    epgzip(epginfo)
 
 # Get EPG data from KT
 def GetEPGFromKT(ChannelInfo):
     ChannelId = ChannelInfo[0]
     ChannelName = ChannelInfo[1]
     ServiceId =  ChannelInfo[3]
-
+    epginfo = []
     url = 'http://tv.olleh.com/renewal_sub/liveTv/pop_schedule_week.asp'
     for k in range(period):
         day = today + datetime.timedelta(days=k)
         params = {'ch_name':'', 'ch_no':ServiceId, 'nowdate':day.strftime('%Y%m%d'), 'seldatie':day.strftime('%Y%m%d'), 'tab_no':'1'}
-        epginfo = []
         try:
-            response = requests.get(url, params=params, headers=ua)
+            response = requests.get(url, params=params, headers=ua, timeout=timeout)
             response.raise_for_status()
             html_data = response.content
-            data = html_data.decode('euc-kr')
-            #data = unicode(html_data, 'euc-kr', 'ignore').encode('utf-8', 'ignore')
+            data = unicode(html_data, 'euc-kr', 'ignore').encode('utf-8', 'ignore')
             strainer = SoupStrainer('table', {'id':'pop_day'})
             soup = BeautifulSoup(data, 'lxml', parse_only=strainer, from_encoding='utf-8')
             html = soup.find('table', {'id':'pop_day'}).tbody.find_all('tr') if soup.find('table', {'id':'pop_day'}) else ''
             if(html):
                 for row in html:
                     for cell in [row.find_all('td')]:
-                        epginfo.append([cell[1].text, str(day) + ' ' + cell[0].text, cell[4].text, cell[2].text])
-                for epg1, epg2 in zip(epginfo, epginfo[1:]):
-                    programName = ''
-                    subprogrmaName = ''
-                    print(epg1[0])
-                    #matches = re.match('^(.*?)( <(.*)>)?$', epg1[0].decode('unicode_escape'))
-                    matches = re.match('^(.*?)( <(.*)>)?$', epg1[0])
-                    if not (matches is None):
-                        programName = matches.group(1) if matches.group(1) else ''
-                        subprogramName = matches.group(3) if matches.group(3) else ''
-                    startTime = datetime.datetime.strptime(epg1[1], '%Y-%m-%d %H:%M')
-                    startTime = startTime.strftime('%Y%m%d%H%M%S')
-                    endTime = datetime.datetime.strptime(epg2[1], '%Y-%m-%d %H:%M')
-                    endTime = endTime.strftime('%Y%m%d%H%M%S')
-                    category = epg1[2]
-                    desc = ''
-                    actors = ''
-                    producers = ''
-                    episode = ''
-                    rebroadcast = False
-                    rating = 0
-                    matches = re.match('(\d+)', epg1[3])
-                    if not(matches is None): rating = int(matches.group())
-                    programdata = {'channelId':ChannelId, 'startTime':startTime, 'endTime':endTime, 'programName':programName, 'subprogramName':subprogramName, 'desc':desc, 'actors':actors, 'producers':producers, 'category':category, 'episode':episode, 'rebroadcast':rebroadcast, 'rating':rating}
-                    writeProgram(programdata)
+                        startTime = endTime = programName = subprogramName = desc = actors = producers = category = episode = ''
+                        rebroadcast = False
+                        rating = 0
+                        startTime = str(day) + ' ' + cell[0].text
+                        startTime = datetime.datetime.strptime(startTime, '%Y-%m-%d %H:%M')
+                        startTime = startTime.strftime('%Y%m%d%H%M%S')
+                        pattern = '^(.*?)( <(.*)>)?$'
+                        matches = re.match(pattern, cell[1].text.decode('string_escape'))
+                        if not (matches is None):
+                            programName = matches.group(1) if matches.group(1) else ''
+                            subprogramName = matches.group(3) if matches.group(3) else ''
+                        category = cell[4].text
+                        matches = re.match('(\d+)', cell[2].text)
+                        if not(matches is None): rating = int(matches.group())
+                        #ChannelId, startTime, programName, subprogramName, desc, actors, producers, category, episode, rebroadcast, rating
+                        epginfo.append([ChannelId, startTime, programName, subprogramName, desc, actors, producers, category, episode, rebroadcast, rating])
+                        time.sleep(0.001)
             else:
                 if(debug): printError(ChannelName + CONTENT_ERROR)
                 else: pass
-        except requests.exceptions.HTTPError:
-            if(debug): printError(ChannelName + HTTP_ERROR)
+        except (requests.exceptions.RequestException) as e:
+            if(debug): printError(ChannelName + str(e))
             else: pass
+    epgzip(epginfo)
 
 # Get EPG data from LG
 def GetEPGFromLG(ChannelInfo):
     ChannelId = ChannelInfo[0]
     ChannelName = ChannelInfo[1]
     ServiceId =  ChannelInfo[3]
-
+    epginfo = []
     url = 'http://www.uplus.co.kr/css/chgi/chgi/RetrieveTvSchedule.hpi'
     for k in range(period):
         day = today + datetime.timedelta(days=k)
         params = {'chnlCd': ServiceId, 'evntCmpYmd': day.strftime('%Y%m%d')}
-        epginfo = []
         try:
-            response = requests.get(url, params=params, headers=ua)
+            response = requests.post(url, data=params, headers=ua, timeout=timeout)
             response.raise_for_status()
             html_data = response.content
-            data = html_data.decode('euc-kr')
-            #data = unicode(html_data, 'euc-kr', 'ignore').encode('utf-8', 'ignore')
-            data = data.replace('<재>', '&lt;재&gt;')
+            data = unicode(html_data, 'euc-kr', 'ignore').encode('utf-8', 'ignore')
+            data = data.replace('<재>', '&lt;재&gt;').replace(' [..','').replace(' (..', '')
             strainer = SoupStrainer('table')
             soup = BeautifulSoup(data, 'lxml', parse_only=strainer, from_encoding='utf-8')
             html = soup.find('table').tbody.find_all('tr') if soup.find('table') else ''
             if(html):
                 for row in html:
                     for cell in [row.find_all('td')]:
+                        startTime = endTime = programName = subprogramName = desc = actors = producers = category = episode = ''
+                        rebroadcast = False
+                        rating = 0
+                        startTime = str(day) + ' ' + cell[0].text
+                        startTime = datetime.datetime.strptime(startTime, '%Y-%m-%d %H:%M')
+                        startTime = startTime.strftime('%Y%m%d%H%M%S')
                         rating = 0 if cell[1].find('span', {'class': 'tag cte_all'}).text.strip()=="All" else int(cell[1].find('span', {'class': 'tag cte_all'}).text.strip())
                         cell[1].find('span', {'class': 'tagGroup'}).decompose()
-                        epginfo.append([cell[1].text.strip(), str(day) + ' ' + cell[0].text, cell[2].text.strip(), rating])
-                        #cell[1].find('img', alt=True)['alt'].strip()])
-                for epg1, epg2 in zip(epginfo, epginfo[1:]):
-                    programName = ''
-                    subprogramName = ''
-                    episode = ''
-                    #matches = re.match('(<재>?)?(.*?)(\[(.*)\])?\s?(\(([\d,]+)회\))?$',  epg1[0].decode('string_escape'))
-                    matches = re.match('(<재>?)?(.*?)(\[(.*)\])?\s?(\(([\d,]+)회\))?$',  epg1[0])
-                    rebroadcast = False
-                    if not (matches is None):
-                        programName = matches.group(2) if matches.group(2) else ''
-                        subprogramName = matches.group(4) if matches.group(4) else ''
-                        rebroadcast = True if matches.group(1) else False
-                        episode = matches.group(6) if matches.group(6) else ''
-                    startTime = datetime.datetime.strptime(epg1[1], '%Y-%m-%d %H:%M')
-                    startTime = startTime.strftime('%Y%m%d%H%M%S')
-                    endTime = datetime.datetime.strptime(epg2[1], '%Y-%m-%d %H:%M')
-                    endTime = endTime.strftime('%Y%m%d%H%M%S')
-                    category = epg1[2]
-                    desc = ''
-                    actors = ''
-                    producers = ''
-                    programdata = {'channelId':ChannelId, 'startTime':startTime, 'endTime':endTime, 'programName':programName, 'subprogramName':subprogramName, 'desc':desc, 'actors':actors, 'producers':producers, 'category':category, 'episode':episode, 'rebroadcast':rebroadcast, 'rating':rating}
-                    writeProgram(programdata)
+                        pattern = '(<재>)?\s?(?:\[.*?\])?(.*?)(?:\[(.*)\])?\s?(?:\(([\d,]+)회\))?$'
+                        matches = re.match(pattern, cell[1].text.strip().decode('string_escape'))
+                        if not (matches is None):
+                            programName = matches.group(2).strip() if matches.group(2) else ''
+                            subprogramName = matches.group(3).strip() if matches.group(3) else ''
+                            episode = matches.group(4) if matches.group(4) else ''
+                            rebroadcast = True if matches.group(1) else False
+                        category =  cell[2].text.strip()
+                        #ChannelId, startTime, programName, subprogramName, desc, actors, producers, category, episode, rebroadcast, rating
+                        epginfo.append([ChannelId, startTime, programName, subprogramName, desc, actors, producers, category, episode, rebroadcast, rating])
+                        time.sleep(0.001)
             else:
                 if(debug): printError(ChannelName + CONTENT_ERROR)
                 else: pass
-        except requests.exceptions.HTTPError:
-            if(debug): printError(ChannelName + HTTP_ERROR)
+        except (requests.exceptions.RequestException) as e:
+            if(debug): printError(ChannelName + str(e))
             else: pass
+    epgzip(epginfo)
 
 # Get EPG data from SK
 def GetEPGFromSK(ChannelInfo):
@@ -278,7 +319,7 @@ def GetEPGFromSK(ChannelInfo):
     url = 'http://m.btvplus.co.kr/Common/Inc/IFGetData.asp'
     params = {'variable': 'IF_LIVECHART_DETAIL', 'pcode':'|^|start_time=' + today.strftime('%Y%m%d') + '00|^|end_time='+ lastday.strftime('%Y%m%d') + '24|^|svc_id=' + str(ServiceId)}
     try:
-        response = requests.get(url, params=params, headers=ua)
+        response = requests.post(url, data=params, headers=ua, timeout=timeout)
         response.raise_for_status()
         json_data = response.text
         try:
@@ -289,11 +330,12 @@ def GetEPGFromSK(ChannelInfo):
             else :
                 programs = data['channel']['programs']
                 for program in programs:
-                    programName = ''
-                    subprogramName = ''
-                    episode = ''
+                    startTime = endTime = programName = subprogramName = desc = actors = producers = category = episode = ''
                     rebroadcast = False
-                    matches = re.match('^(.*?)(?:\s*[\(<]([\d,회]+)[\)>])?(?:\s*<([^<]*?)>)?(\((재)\))?$', program['programName'].replace('...', '>'))
+                    rating = 0
+                    programName = program['programName'].replace('...', '>').encode('utf-8')
+                    pattern = '^(.*?)(?:\s*[\(<]([\d,회]+)[\)>])?(?:\s*<([^<]*?)>)?(\((재)\))?$'
+                    matches = re.match(pattern, programName)
                     if not (matches is None):
                         programName = matches.group(1).strip() if matches.group(1) else ''
                         subprogramName = matches.group(3).strip() if matches.group(3) else ''
@@ -304,39 +346,92 @@ def GetEPGFromSK(ChannelInfo):
                     startTime = startTime.strftime('%Y%m%d%H%M%S')
                     endTime = datetime.datetime.fromtimestamp(int(program['endTime'])/1000)
                     endTime = endTime.strftime('%Y%m%d%H%M%S')
-                    if addverbose=='y' :
-                        desc = program['synopsis'] if program['synopsis'] else ''
-                        actors = program['actorName'].replace('...','').strip(', ') if program['actorName'] else ''
-                        producers = program['directorName'].replace('...','').strip(', ')  if program['directorName'] else ''
-                    else:
-                        desc = ''
-                        actors = ''
-                        producers = ''
+                    desc = program['synopsis'] if program['synopsis'] else ''
+                    actors = program['actorName'].replace('...','').strip(', ') if program['actorName'] else ''
+                    producers = program['directorName'].replace('...','').strip(', ')  if program['directorName'] else ''
                     if not (program['mainGenreName'] is None) :
                         category = program['mainGenreName']
-                    else:
-                        category = ''
                     rating = int(program['ratingCd']) if program['programName'] else 0
                     programdata = {'channelId':ChannelId, 'startTime':startTime, 'endTime':endTime, 'programName':programName, 'subprogramName':subprogramName, 'desc':desc, 'actors':actors, 'producers':producers, 'category':category, 'episode':episode, 'rebroadcast':rebroadcast, 'rating':rating}
                     writeProgram(programdata)
+                    time.sleep(0.001)
         except ValueError:
             if(debug): printError(ChannelName + CONTENT_ERROR)
             else: pass
-    except requests.exceptions.HTTPError:
-        if(debug): printError(ChannelName + HTTP_ERROR)
+    except (requests.exceptions.RequestException) as e:
+        if(debug): printError(ChannelName + str(e))
         else: pass
+
+#Get EPG data from SKB
+def GetEPGFromSKB(ChannelInfo):
+    ChannelId = ChannelInfo[0]
+    ChannelName = ChannelInfo[1]
+    ServiceId =  ChannelInfo[3]
+    url = 'http://m.skbroadband.com/content/realtime/Channel_List.do'
+    epginfo = []
+    for k in range(period):
+        day = today + datetime.timedelta(days=k)
+        params = {'key_depth2': ServiceId, 'key_depth3': day.strftime('%Y%m%d')}
+        try:
+            response = requests.get(url, params=params, headers=ua, timeout=timeout)
+            response.raise_for_status()
+            html_data = response.content
+            data = unicode(html_data, 'euc-kr', 'ignore').encode('utf-8', 'ignore')
+            data = re.sub('<!--(.*?)-->', '', data, 0, re.I|re.S)
+            data = re.sub('<span></span>', '', data)
+            data = re.sub('<span class="title">', '<span>', data)
+            data = re.sub('<span class="explan">화면해설</span>','',data)
+            data = re.sub('<span class="caption">자막방송</span>','',data)
+            data = re.sub('<span class="fullHD">Full HD</span>','',data)
+            data = re.sub('<span class="UHD">UHD</span>','',data)
+            data = re.sub('<span class="nowon">now on</span>','',data)
+            pattern = '<span>(.*)<\/span>'
+            data = re.sub(pattern, partial(replacement, tag='span'), data)
+            #print(data)
+            strainer = SoupStrainer('div', {'id':'dawn'})
+            soup = BeautifulSoup(data, 'lxml', parse_only=strainer, from_encoding='utf-8')
+            html =  soup.find_all('li') if soup.find_all('li') else ''
+            if(html):
+                for row in html:
+                    startTime = endTime = programName = subprogramName = desc = actors = producers = category = episode = ''
+                    rebroadcast = False
+                    rating = 0
+                    startTime = str(day) + ' ' + row.find('span', {'class':'time'}).text
+                    startTime = datetime.datetime.strptime(startTime, '%Y-%m-%d %H:%M')
+                    startTime = startTime.strftime('%Y%m%d%H%M%S')
+                    cell = row.find('span', {'class':'title'}).text.decode('string_escape').strip()
+                    pattern = "^(.*?)(\(([\d,]+)회\))?(<(.*)>)?(\((재)\))?$"
+                    matches = re.match(pattern, cell)
+                    if not(matches is None) :
+                        programName = matches.group(1) if matches.group(1) else ''
+                        subprogramName = matches.group(5) if matches.group(5) else ''
+                        rebroadcast = True if matches.group(7) else False
+                        episode = matches.group(3) if matches.group(3) else ''
+                    rating = row.find('span', {'class':re.compile('^watch.*$')})
+                    if not(rating is None) :
+                        rating = int(rating.text.decode('string_escape').replace('세','').strip())
+                    #ChannelId, startTime, programName, subprogramName, desc, actors, producers, category, episode, rebroadcast, rating
+                    epginfo.append([ChannelId, startTime, programName, subprogramName, desc, actors, producers, category, episode, rebroadcast, rating])
+                    time.sleep(0.001)
+            else:
+                if(debug): printError(ChannelName + CONTENT_ERROR)
+                else: pass
+        except (requests.exceptions.RequestException) as e:
+            if(debug): printError(ChannelName + str(e))
+            else: pass
+    epgzip(epginfo)
 
 # Get EPG data from SKY
 def GetEPGFromSKY(ChannelInfo):
     ChannelId = ChannelInfo[0]
     ChannelName = ChannelInfo[1]
     ServiceId =  ChannelInfo[3]
-    url = 'http://www.skylife.co.kr/channel/epg/channelScheduleList.do'
+    url = 'http://www.skylife.co.kr/channel/epg/channelScheduleListJson.do'
     for k in range(period):
         day = today + datetime.timedelta(days=k)
         params = {'area': 'in', 'inFd_channel_id': ServiceId, 'inairdate': day.strftime('%Y-%m-%d'), 'indate_type': 'now'}
         try:
-            response = requests.get(url, params=params, headers=ua)
+            response = requests.post(url, data=params, headers=ua, timeout=timeout)
             response.raise_for_status()
             json_data = response.text
             try:
@@ -347,33 +442,35 @@ def GetEPGFromSKY(ChannelInfo):
                 else :
                     programs = data['scheduleListIn']
                     for program in programs :
+                        startTime = endTime = programName = subprogramName = desc = actors = producers = category = episode = ''
+                        rebroadcast = False
+                        rating = 0
                         programName = unescape(program['program_name']).replace('lt;','<').replace('gt;','>').replace('amp;','&') if program['program_name'] else ''
                         subprogramName = unescape(program['program_subname']).replace('lt;','<').replace('gt;','>').replace('amp;','&') if program['program_subname'] else ''
                         startTime = program['starttime']
                         endTime = program['endtime']
-                        if addverbose == 'y':
-                            actors = program['cast'].replace('...','').strip(', ') if program['cast'] else ''
-                            producers = program['dirt'].replace('...','').strip(', ') if program['dirt'] else ''
-                            description = unescape(program['description']).replace('lt;','<').replace('gt;','>').replace('amp;','&') if program['description'] else ''
-                            summary = unescape(program['summary']).replace('lt;','<').replace('gt;','>').replace('amp;','&') if program['summary'] else ''
-                            desc = description if description else ''
+                        actors = program['cast'].replace('...','').strip(', ') if program['cast'] else ''
+                        producers = program['dirt'].replace('...','').strip(', ') if program['dirt'] else ''
+                        description = unescape(program['description']).replace('lt;','<').replace('gt;','>').replace('amp;','&') if program['description'] else ''
+                        summary = unescape(program['summary']).replace('lt;','<').replace('gt;','>').replace('amp;','&') if program['summary'] else ''
+                        desc = description if description else ''
+                        if desc:
                             if summary : desc = desc + '\n' + summary
-                        else:
-                            desc = ''
-                            actors = ''
-                            producers = ''
+                        else: 
+                            desc = summary
                         category = program['program_category1']
                         episode = program['episode_id'] if program['episode_id'] else ''
                         if episode : episode = int(episode)
-                        rebroadcast = True  if program['rebroad']== 'Y' else False
+                        rebroadcast = True if program['rebroad']== 'Y' else False
                         rating = int(program['grade']) if program['grade'] else 0
                         programdata = {'channelId':ChannelId, 'startTime':startTime, 'endTime':endTime, 'programName':programName, 'subprogramName':subprogramName, 'desc':desc, 'actors':actors, 'producers':producers, 'category':category, 'episode':episode, 'rebroadcast':rebroadcast, 'rating':rating}
                         writeProgram(programdata)
+                        time.sleep(0.001)
             except ValueError:
                 if(debug): printError(ChannelName + CONTENT_ERROR)
                 else: pass
-        except requests.exceptions.HTTPError:
-            if(debug): printError(ChannelName + HTTP_ERROR)
+        except (requests.exceptions.RequestException) as e:
+            if(debug): printError(ChannelName + str(e))
             else: pass
 
 # Get EPG data from Naver
@@ -387,11 +484,9 @@ def GetEPGFromNaver(ChannelInfo):
     for k in range(period):
         day = today + datetime.timedelta(days=k)
         totaldate.append(day.strftime('%Y%m%d'))
-
     params = {'_callback': 'epg', 'fileKey': 'single_schedule_channel_day', 'pkid': '66', 'u1': 'single_schedule_channel_day', 'u2': ','.join(totaldate), 'u3': today.strftime('%Y%m%d'), 'u4': period, 'u5': ServiceId, 'u6': '1', 'u7': ChannelName + '편성표', 'u8': ChannelName + '편성표', 'where': 'nexearch'}
-
     try:
-        response = requests.get(url, params=params, headers=ua)
+        response = requests.get(url, params=params, headers=ua, timeout=timeout)
         response.raise_for_status()
         json_data = re.sub(re.compile("/\*.*?\*/",re.DOTALL ) ,"" ,response.text.split("epg(")[1].strip(");").strip())
         try:
@@ -399,43 +494,462 @@ def GetEPGFromNaver(ChannelInfo):
             for i, date in enumerate(data['displayDates']):
                 for j in range(0,24):
                     for program in data['schedules'][j][i]:
-                        epginfo.append([program['title'], date['date'] + ' ' + program['startTime'], program['episode'].replace('회',''), program['isRerun'], program['grade']])
-
-            for epg1, epg2 in zip(epginfo, epginfo[1:]):
-                programName = unescape(epg1[0]) if epg1[0] else ''
-                subprogramName = ''
-                startTime = datetime.datetime.strptime(epg1[1], '%Y%m%d %H:%M')
-                startTime = startTime.strftime('%Y%m%d%H%M%S')
-                endTime = datetime.datetime.strptime(epg2[1], '%Y%m%d %H:%M')
-                endTime = endTime.strftime('%Y%m%d%H%M%S')
-                desc = ''
-                actors = ''
-                producers = ''
-                category = ''
-                episode = epg1[2] if epg1[2] else ''
-                if episode : episode = int(episode)
-                rebroadcast = epg1[3]
-                rating = epg1[4]
-                programdata = {'channelId':ChannelId, 'startTime':startTime, 'endTime':endTime, 'programName':programName, 'subprogramName':subprogramName, 'desc':desc, 'actors':actors, 'producers':producers, 'category':category, 'episode':episode, 'rebroadcast':rebroadcast, 'rating':rating}
-                writeProgram(programdata)
+                        startTime = endTime = programName = subprogramName = desc = actors = producers = category = episode = ''
+                        rebroadcast = False
+                        rating = 0
+                        programName = unescape(program['title'])
+                        startTime = date['date'] + ' ' + program['startTime']
+                        startTime = datetime.datetime.strptime(startTime, '%Y%m%d %H:%M')
+                        startTime = startTime.strftime('%Y%m%d%H%M%S')
+                        episode = program['episode'].replace('회','')
+                        rebroadcast = program['isRerun']
+                        rating = program['grade']
+                         #ChannelId, startTime, programName, subprogramName, desc, actors, producers, category, episode, rebroadcast, rating
+                        epginfo.append([ChannelId, startTime, programName, subprogramName, desc, actors, producers, category, episode, rebroadcast, rating])
+                        time.sleep(0.001)
         except ValueError:
              if(debug): printError(ChannelName + CONTENT_ERROR)
              else: pass
-    except requests.exceptions.HTTPError:
-        if(debug): printError(ChannelName + HTTP_ERROR)
+    except (requests.RequestException) as e:
+        if(debug): printError(ChannelName + str(e))
         else: pass
+    epgzip(epginfo)
+
+# Get EPG data from ISCS
+def GetEPGFromIscs(ChannelInfo):
+    ChannelId = ChannelInfo[0]
+    ChannelName = ChannelInfo[1]
+    ServiceId =  ChannelInfo[3]
+    epginfo = []
+    epginfo2 = []
+    url='http://m.iscs.co.kr/sub/02/data.asp'
+    for k in range(period):
+        istomorrow = False
+        day = today + datetime.timedelta(days=k)
+        params = {'Exec_Mode': 'view', 'Source_Id': ServiceId, 'Ch_Day': day}
+        response = requests.post(url, data=params, headers=ua, timeout=timeout)
+        response.raise_for_status()
+        json_data = response.text
+        try:
+            data = json.loads(json_data, encoding='utf-8')
+            if(data['total'] > 0 ):
+                programs = data['list']
+                for program in programs:
+                    startTime = endTime = programName = subprogramName = desc = actors = producers = category = episode = ''
+                    rebroadcast = False
+                    rating = 0
+                    if program['Time'].startswith('1') or program['Time'].startswith('2'):
+                        istomorrow = True
+                    if program['Time'].startswith('0') and istomorrow == True:
+                        startTime = str(day + datetime.timedelta(days=1)) + ' ' + program['Time']
+                    else:
+                        startTime = str(day) + ' ' + program['Time']
+                    startTime = datetime.datetime.strptime(startTime, '%Y-%m-%d %H:%M')
+                    startTime = startTime.strftime('%Y%m%d%H%M%S')
+                    pattern = '^(.*?)(?:\(([\d,]+)회\))?(?:\((재)\))?$';
+                    matches = re.match(pattern, program['Pg_Name'].decode('string_escape').strip())
+                    if not(matches is None) :
+                        programName = matches.group(1) if matches.group(1) else ''
+                        episode = matches.group(2) if matches.group(2) else ''
+                        rebroadcast = True if matches.group(3) else False
+                    if program['Rating'].decode('string_escape').strip() == '모든연령':
+                        rating = 0
+                    else:
+                        rating = program['Rating'].replace('세이상','')
+                    #ChannelId, startTime, programName, subprogramName, desc, actors, producers, category, episode, rebroadcast, rating
+                    epginfo.append([ChannelId, startTime, programName, subprogramName, desc, actors, producers, category, episode, rebroadcast, rating])
+                    time.sleep(0.001)
+        except ValueError:
+            if(debug): printError(ChannelName + CONTENT_ERROR)
+            else: pass
+        except (requests.RequestException) as e:
+            if(debug): printError(ChannelName + str(e))
+            else: pass
+    for i in epginfo:
+        if not i in epginfo2:
+            epginfo2.append(i)
+    epgzip(epginfo2)
+
+# Get EPG data from HCN
+def GetEPGFromHcn(ChannelInfo):
+    ChannelId = ChannelInfo[0]
+    ChannelName = ChannelInfo[1]
+    ServiceId =  ChannelInfo[3]
+    epginfo = []
+    url = 'http://m.hcn.co.kr/sch_ScheduleList.action'
+    for k in range(period):
+        day = today + datetime.timedelta(days=k)
+        params = {'method': 'ajax_00', 'pageType': 'sheetList', 'ch_id': ServiceId, 'onairdate': day}
+        params = {'ch_id': ServiceId, 'onairdate': day, '_':  int(time.time()*1000)}
+        try:
+            response = requests.get(url, params=params, headers=ua, timeout=timeout)
+            response.raise_for_status()
+            html_data = response.content
+            data = html_data
+            strainer = SoupStrainer('li')
+            soup = BeautifulSoup(data, 'lxml', parse_only=strainer, from_encoding='utf-8')
+            html =  soup.find_all('li') if soup.find_all('li') else ''
+            if(html) :
+                for row in html:
+                    startTime = endTime = programName = subprogramName = desc = actors = producers = category = episode = ''
+                    rebroadcast = False
+                    rating = 0
+                    if 'noData' in row['class']:
+                        continue
+                    startTime = str(day) + ' ' + row.find('span', {'class':'progTime'}).text.strip()
+                    startTime = datetime.datetime.strptime(startTime, '%Y-%m-%d %H:%M')
+                    startTime = startTime.strftime('%Y%m%d%H%M%S')
+                    programName = row.find('span', {'class':'progTitle'}).text.decode('string_escape').strip()
+                    for image in row.find_all('img', {'class':'vM'}, alt=True):
+                        rebroad = re.match('(재방송)',image['alt'].decode('string_escape').strip())
+                        if not (rebroad is None): rebroadcast = True
+                        grade = re.match('([\d,]+)',image['alt'])
+                        if not (grade is None): rating = int(grade.group(1))
+                    #ChannelId, startTime, programName, subprogramName, desc, actors, producers, category, episode, rebroadcast, rating
+                    epginfo.append([ChannelId, startTime, programName, subprogramName, desc, actors, producers, category, episode, rebroadcast, rating])
+                    time.sleep(0.001)
+        except ValueError:
+            if(debug): printError(ChannelName + CONTENT_ERROR)
+            else: pass
+        except (requests.exceptions.RequestException) as e:
+            if(debug): printError(ChannelName + str(e))
+            else: pass
+    epgzip(epginfo)  
+
+# Get EPG data from POOQ
+def GetEPGFromPooq(ChannelInfo):
+    ChannelId = ChannelInfo[0]
+    ChannelName = ChannelInfo[1]
+    ServiceId =  ChannelInfo[3]
+    epginfo = []
+    lastday = today + datetime.timedelta(days=period)
+    url = 'https://wapie.pooq.co.kr/v1/epgs30/' + str(ServiceId) + '/'
+    params = {'deviceTypeId': 'pc', 'marketTypeId': 'generic', 'apiAccessCredential': 'EEBE901F80B3A4C4E5322D58110BE95C', 'offset': '0', 'limit': '1000', 'startTime': today.strftime('%Y/%m/%d') + ' 00:00', 'endTime': lastday.strftime('%Y/%m/%d') + ' 00:00'}
+    date_list = [(today + datetime.timedelta(days=x)).strftime('%Y-%m-%d') for x in range(0, period)]
+    try:
+        response = requests.get(url, params=params, headers=ua, timeout=timeout)
+        response.raise_for_status()
+        json_data = response.text
+        try:
+            data = json.loads(json_data, encoding='utf-8')
+            if (data['result']['count'] == 0) :
+                 if(debug): printError(ChannelName + CONTENT_ERROR)
+                 else: pass
+            else :
+                programs = data['result']['list']
+                for program in programs:
+                    startTime = endTime = programName = subprogramName = desc = actors = producers = category = episode = ''
+                    rebroadcast = False
+                    rating = 0
+                    if program['startDate'] in date_list :
+                        startTime = program['startDate'] + ' ' + program['startTime']
+                        startTime = datetime.datetime.strptime(startTime, '%Y-%m-%d %H:%M')
+                        startTime = startTime.strftime('%Y%m%d%H%M%S')
+                        #programName = program['programTitle'].replace("\r\n", "").encode('utf-8');
+                        programName = program['programTitle'].replace("\r\n", "")
+                        pattern = '^(.*?)(?:([\d,]+)회)?(?:\((재)\))?$'
+                        matches = re.match(pattern, programName)
+                        if not(matches is None) :
+                            programName = matches.group(1).strip() if matches.group(1) else ''
+                            episode = matches.group(2).strip() if matches.group(2) else ''
+                            rebroadcast = True if matches.group(3) else False
+                        actors = program['programStaring'].strip(',').strip() if program['programStaring'] else ''
+                        desc = program['programSummary'].strip() if program['programSummary'] else ''
+                        rating = int(program['age'])
+                        #ChannelId, startTime, programName, subprogramName, desc, actors, producers, category, episode, rebroadcast, rating
+                        epginfo.append([ChannelId, startTime, programName, subprogramName, desc, actors, producers, category, episode, rebroadcast, rating])
+                        time.sleep(0.001)
+        except ValueError:
+            if(debug): printError(ChannelName + CONTENT_ERROR)
+            else: pass
+    except (requests.exceptions.RequestException) as e:
+        if(debug): printError(ChannelName + str(e))
+        else: pass
+    epgzip(epginfo)
+
+# Get EPG data from MBC
+def GetEPGFromMbc(ChannelInfo):
+    ChannelId = ChannelInfo[0]
+    ChannelName = ChannelInfo[1]
+    ServiceId =  ChannelInfo[3]
+    dayofweek = ['월', '화', '수', '목', '금', '토', '일']
+    url = 'http://miniunit.imbc.com/Schedule'
+    params = {'rtype': 'json'}
+    for k in range(period):
+        day = today + datetime.timedelta(days=k)
+        try:
+            response = requests.get(url, params=params, headers=ua, timeout=timeout)
+            response.raise_for_status()
+            json_data = response.text
+            try:
+                data = json.loads(json_data, encoding='utf-8')
+                for program in data['Programs']:
+                    startTime = endTime = programName = subprogramName = desc = actors = producers = category = episode = ''
+                    rebroadcast = False
+                    rating = 0
+                    if program['Channel'] == "CHAM" and program['LiveDays'] == dayofweek[day.weekday()]:
+                        pattern = '^(.*?)(\(재\))?$'
+                        #matches = re.match(pattern, unescape(program['ProgramTitle'].encode('utf-8', 'ignore')))
+                        matches = re.match(pattern, unescape(program['ProgramTitle']))
+                        if not(matches is None):
+                            programName = matches.group(1)
+                            rebroadcast = True if matches.group(2) else False
+                        startTime = str(day) + ' ' + program['StartTime']
+                        startTime = datetime.datetime.strptime(startTime, '%Y-%m-%d %H%M')
+                        endTime = startTime  + datetime.timedelta(minutes=int(program['RunningTime']))
+                        startTime = startTime.strftime('%Y%m%d%H%M%S')
+                        endTime = endTime.strftime('%Y%m%d%H%M%S')
+                        category = '음악'
+                        programdata = {'channelId':ChannelId, 'startTime':startTime, 'endTime':endTime, 'programName':programName, 'subprogramName':subprogramName, 'desc':desc, 'actors':actors, 'producers':producers, 'category':category, 'episode':episode, 'rebroadcast':rebroadcast, 'rating':rating}
+                        writeProgram(programdata)
+                    time.sleep(0.001)
+            except ValueError:
+                 if(debug): printError(ChannelName + CONTENT_ERROR)
+                 else: pass
+        except (requests.exceptions.RequestException) as e:
+            if(debug): printError(ChannelName + str(e))
+            else: pass
+
+# Get EPG data from MIL
+def GetEPGFromMil(ChannelInfo):
+    ChannelId = ChannelInfo[0]
+    ChannelName = ChannelInfo[1]
+    ServiceId =  ChannelInfo[3]
+    url = 'http://radio.dema.mil.kr/web/fm/quick/ajaxTimetableList.do'
+    for k in range(period):
+        day = today + datetime.timedelta(days=k)
+        params = {'program_date': day.strftime('%Y%m%d')}
+        try:
+            response = requests.get(url, params=params, headers=ua, timeout=timeout)
+            response.raise_for_status()
+            json_data = response.text
+            try:
+                data = json.loads(json_data, encoding='utf-8')
+                for program in data['resultList']:
+                    startTime = endTime = programName = subprogramName = desc = actors = producers = category = episode = ''
+                    rebroadcast = False
+                    rating = 0
+                    pattern = '^(.*?)(\(재\))?$'
+                    #matches = re.match(pattern, unescape(program['program_title'].encode('utf-8', 'ignore')))
+                    matches = re.match(pattern, unescape(program['program_title']))
+                    if not(matches is None):
+                        programName = matches.group(1)
+                        rebroadcast = True if matches.group(2) else False
+                    subprogramName =  unescape(program['program_subtitle'])
+                    startTime = str(day) + ' ' + program['program_time']
+                    startTime = datetime.datetime.strptime(startTime, '%Y-%m-%d %H%M')
+                    startTime = startTime.strftime('%Y%m%d%H%M%S')
+                    endTime = str(day) + ' ' + program['program_end_time']
+                    try:
+                        endTime = datetime.datetime.strptime(endTime, '%Y-%m-%d %H%M')
+                        endTime = endTime.strftime('%Y%m%d%H%M%S')
+                    except ValueError:
+                        endTime = endTime.replace(' 24', ' 23')
+                        endTime = datetime.datetime.strptime(endTime, '%Y-%m-%d %H%M')
+                        endTime = endTime + datetime.timedelta(hours=1)
+                        endTime = endTime.strftime('%Y%m%d%H%M%S')
+                    actors =  unescape(program['movie_actor'])
+                    producers =  unescape(program['movie_director'])
+                    programdata = {'channelId':ChannelId, 'startTime':startTime, 'endTime':endTime, 'programName':programName, 'subprogramName':subprogramName, 'desc':desc, 'actors':actors, 'producers':producers, 'category':category, 'episode':episode, 'rebroadcast':rebroadcast, 'rating':rating}
+                    writeProgram(programdata)
+                    time.sleep(0.001)
+            except ValueError:
+                 if(debug): printError(ChannelName + CONTENT_ERROR)
+                 else: pass
+        except (requests.exceptions.RequestException) as e:
+            if(debug): printError(ChannelName + str(e))
+            else: pass
+
+# Get EPG data from IFM
+def GetEPGFromIfm(ChannelInfo):
+    ChannelId = ChannelInfo[0]
+    ChannelName = ChannelInfo[1]
+    ServiceId =  ChannelInfo[3]
+    dayofweek = ['1', '2', '3', '4', '5', '6', '7']
+    url = 'http://mapp.itvfm.co.kr/hyb/front/selectHybPgmList.do'
+    for k in range(period):
+        day = today + datetime.timedelta(days=k)
+        params = {'outDay':dayofweek[(day.weekday()+1)%7], 'viewDt':day}
+        try:
+            response = requests.get(url, params=params, headers=ua, timeout=timeout)
+            response.raise_for_status()
+            json_data = response.text
+            try:
+                data = json.loads(json_data, encoding='utf-8')
+                for program in data['hybMusicInfoList']:
+                    startTime = endTime = programName = subprogramName = desc = actors = producers = category = episode = ''
+                    rebroadcast = False
+                    rating = 0
+                    programName = unescape(program['pgmTitle'])
+                    startTime = str(day) + ' ' + program['pgmStime']
+                    startTime = datetime.datetime.strptime(startTime, '%Y-%m-%d %H:%M')
+                    startTime = startTime.strftime('%Y%m%d%H%M%S')
+                    endTime = str(day) + ' ' + program['pgmEtime']
+                    try:
+                        endTime = datetime.datetime.strptime(endTime, '%Y-%m-%d %H:%M')
+                        endTime = endTime.strftime('%Y%m%d%H%M%S')
+                    except ValueError:
+                        endTime = endTime.replace(' 24', ' 23')
+                        endTime = datetime.datetime.strptime(endTime, '%Y-%m-%d %H:%M')
+                        endTime = endTime + datetime.timedelta(hours=1)
+                        endTime = endTime.strftime('%Y%m%d%H%M%S')
+                    actors = program['pgmDj']
+                    producers = program['pgmPd']
+                    programdata = {'channelId':ChannelId, 'startTime':startTime, 'endTime':endTime, 'programName':programName, 'subprogramName':subprogramName, 'desc':desc, 'actors':actors, 'producers':producers, 'category':category, 'episode':episode, 'rebroadcast':rebroadcast, 'rating':rating}
+                    writeProgram(programdata)
+                    time.sleep(0.001)
+            except ValueError:
+                 if(debug): printError(ChannelName + CONTENT_ERROR)
+                 else: pass
+        except (requests.exceptions.RequestException) as e:
+            if(debug): printError(ChannelName + str(e))
+            else: pass
+
+# Get EPG data from KBS
+def GetEPGFromKbs(ChannelInfo):
+    ChannelId = ChannelInfo[0]
+    ChannelName = ChannelInfo[1]
+    ServiceId =  ChannelInfo[3]
+    epginfo = []
+    url = 'http://world.kbs.co.kr/include/wink/_ajax_schedule.php'
+    params = {'channel':'wink_11'}
+    for k in range(period):
+        day = today + datetime.timedelta(days=k)
+        try:
+            response = requests.get(url, params=params, headers=ua, timeout=timeout)
+            response.raise_for_status()
+            json_data = response.text
+            try:
+                data = json.loads(json_data, encoding='utf-8')
+                soup = BeautifulSoup(data['schedule'], 'lxml')
+                for row in soup.find_all('li'):
+                    startTime = endTime = programName = subprogramName = desc = actors = producers = category = episode = ''
+                    rebroadcast = False
+                    rating = 0
+                    pattern = '([0-2][0-9]:[0-5][0-9])[0-2][0-9]:[0-5][0-9]\[(.*)\] Broadcast'
+                    #matches = re.match(pattern, unescape(row.text.encode('utf-8', 'ignore')))
+                    matches = re.match(pattern, unescape(row.text))
+                    if not(matches is None):
+                        programName = unescape(matches.group(2))
+                        startTime = str(day) + ' ' + matches.group(1)
+                        startTime = datetime.datetime.strptime(startTime, '%Y-%m-%d %H:%M')
+                        startTime = startTime.strftime('%Y%m%d%H%M%S')
+                    #ChannelId, startTime, programName, subprogramName, desc, actors, producers, category, episode, rebroadcast, rating
+                    epginfo.append([ChannelId, startTime, programName, subprogramName, desc, actors, producers, category, episode, rebroadcast, rating])
+                    time.sleep(0.001)
+            except ValueError:
+                 if(debug): printError(ChannelName + CONTENT_ERROR)
+                 else: pass
+        except (requests.exceptions.RequestException) as e:
+            if(debug): printError(ChannelName + str(e))
+            else: pass
+    epgzip(epginfo)
+
+# Get EPG data from ARIRANG
+def GetEPGFromArirang(ChannelInfo):
+    ChannelId = ChannelInfo[0]
+    ChannelName = ChannelInfo[1]
+    ServiceId =  ChannelInfo[3]
+    epginfo = []
+    url = 'http://www.arirang.com/Radio/Radio_Index.asp'
+    for k in range(period):
+        day = today + datetime.timedelta(days=k)
+        params = {}
+        try:
+            response = requests.get(url, params=params, headers=ua, timeout=timeout)
+            response.raise_for_status()
+            data = response.content
+            if day.weekday() < 5 :
+                strainer = SoupStrainer('table', {'id':'aIRSW_week'})
+            elif day.weekday() == 5:
+                strainer = SoupStrainer('table', {'id':'aIRSW_sat'})
+            elif day.weekday() == 6:
+                strainer = SoupStrainer('table', {'id':'aIRSW_sun'})
+            soup = BeautifulSoup(data, 'lxml', parse_only=strainer, from_encoding='utf-8')
+            html =  soup.find_all('tr') if soup.find_all('tr') else ''
+            if(html):
+                for row in html:
+                    startTime = endTime = programName = subprogramName = desc = actors = producers = category = episode = ''
+                    rebroadcast = False
+                    rating = 0
+                    for i, minute in enumerate(row.find('th').text.split('~')):
+                        if i == 0:
+                            startTime = str(day) + ' ' + minute
+                        elif i == 1:
+                            endTime = str(day) + ' ' + minute
+                    startTime = datetime.datetime.strptime(startTime, '%Y-%m-%d %H:%M')
+                    startTime = startTime.strftime('%Y%m%d%H%M%S')
+                    try:
+                        endTime = datetime.datetime.strptime(endTime, '%Y-%m-%d %H:%M')
+                        endTime = endTime.strftime('%Y%m%d%H%M%S')
+                    except ValueError:
+                        endTime = endTime.replace(' 24', ' 23')
+                        endTime = datetime.datetime.strptime(endTime, '%Y-%m-%d %H:%M')
+                        endTime = endTime + datetime.timedelta(hours=1)
+                        endTime = endTime.strftime('%Y%m%d%H%M%S')
+                    pattern = '^(.*?)(?:\((Re)\))?$'
+                    #matches = re.match(pattern, unescape(row.find('td').text.decode('string_escape').strip().encode('utf-8', 'ignore')))
+                    matches = re.match(pattern, unescape(row.find('td').text.decode('string_escape').strip()))
+                    if not(matches is None):
+                        programName = unescape(matches.group(1))
+                        rebroadcast = True if matches.group(2) else False
+                    programdata = {'channelId':ChannelId, 'startTime':startTime, 'endTime':endTime, 'programName':programName, 'subprogramName':subprogramName, 'desc':desc, 'actors':actors, 'producers':producers, 'category':category, 'episode':episode, 'rebroadcast':rebroadcast, 'rating':rating}
+                    writeProgram(programdata)
+                    time.sleep(0.001)
+            else:
+                if(debug): printError(ChannelName + CONTENT_ERROR)
+                else: pass
+        except (requests.exceptions.RequestException) as e:
+            if(debug): printError(ChannelName + str(e))
+            else: pass
+
+# Zip epginfo
+def epgzip(epginfo):
+    #ChannelId, startTime, programName, subprogramName, desc, actors, producers, category, episode, rebroadcast, rating
+    for epg1, epg2 in zip(epginfo, epginfo[1:]):
+        programdata = {}
+        ChannelId = epg1[0]
+        startTime = epg1[1] if epg1[1] else ''
+        endTime = epg2[1] if epg2[1] else ''
+        programName = epg1[2] if epg1[2] else ''
+        subprogramName = epg1[3] if epg1[3] else ''
+        desc = epg1[4] if epg1[4] else ''
+        actors = epg1[5] if epg1[5] else ''
+        producers = epg1[6] if epg1[6] else ''
+        category = epg1[7] if epg1[7] else ''
+        episode = epg1[8] if epg1[8] else ''
+        rebroadcast = True if epg1[9] else False
+        rating = int(epg1[10]) if epg1[10] else 0
+        programdata = {'channelId':ChannelId, 'startTime':startTime, 'endTime':endTime, 'programName':programName, 'subprogramName':subprogramName, 'desc':desc, 'actors':actors, 'producers':producers, 'category':category, 'episode':episode, 'rebroadcast':rebroadcast, 'rating':rating}
+        writeProgram(programdata)
 
 # Write Program
 def writeProgram(programdata):
     ChannelId = programdata['channelId']
     startTime = programdata['startTime']
     endTime = programdata['endTime']
-    programName = escape(programdata['programName'])
-    subprogramName = escape(programdata['subprogramName'])
+    programName = escape(programdata['programName']).strip()
+    subprogramName = escape(programdata['subprogramName']).strip()
+    #matches = re.match('(.*) \(?(\d+부)\)?', unescape(programName.encode('utf-8', 'ignore')))
+    matches = re.match('(.*) \(?(\d+부)\)?', unescape(programName))
+    if not(matches is None):
+        programName = escape(matches.group(1)).strip();
+        subprogramName = escape(matches.group(2)) + ' ' + subprogramName
+        subprogramName = subprogramName.strip()
+    if programName is None:
+        programName = subprogramName
     actors = escape(programdata['actors'])
     producers = escape(programdata['producers'])
     category = escape(programdata['category'])
     episode = programdata['episode']
+    if episode:
+        try:
+            episode_ns = int(episode) - 1
+            episode_ns = '0'+ '.' +  str(episode_ns) + '.' + '0' + '/' + '0'
+        except ValueError as ex:
+            episode_ns = int(episode.split(',', 1)[0]) - 1
+            episode_ns = '0'+ '.' +  str(episode_ns) + '.' + '0' + '/' + '0'
+        episode_on = episode
     rebroadcast = programdata['rebroadcast']
     if episode and addepisode  == 'y': programName = programName + ' ('+ str(episode) + '회)'
     if rebroadcast  == True and addrebroadcast == 'y' : programName = programName + ' (재)'
@@ -444,20 +958,22 @@ def writeProgram(programdata):
     else :
         rating = '%s세 이상 관람가' % (programdata['rating'])
     if addverbose == 'y':
-        desc = escape(programdata['programName'])
+        desc = escape(programdata['programName']).strip()
         if subprogramName : desc = desc + '\n부제 : ' + subprogramName
+        if rebroadcast == True and addrebroadcast == 'y' : desc = desc + '\n방송 : 재방송'
         if episode : desc = desc + '\n회차 : ' + str(episode) + '회'
         if category : desc = desc + '\n장르 : ' + category
-        if actors : desc = desc + '\n출연 : ' + actors
-        if producers : desc = desc + '\n제작 : ' + producers
+        if actors : desc = desc + '\n출연 : ' + actors.strip()
+        if producers : desc = desc + '\n제작 : ' + producers.strip()
         desc = desc + '\n등급 : ' + rating
     else:
         desc =''
     if programdata['desc'] : desc = desc + '\n' + escape(programdata['desc'])
+    desc = re.sub(' +',' ', desc)
     contentTypeDict={'교양':'Arts / Culture (without music)', '만화':'Cartoons / Puppets', '교육':'Education / Science / Factual topics', '취미':'Leisure hobbies', '드라마':'Movie / Drama', '영화':'Movie / Drama', '음악':'Music / Ballet / Dance', '뉴스':'News / Current affairs', '다큐':'Documentary', '라이프':'Documentary', '시사/다큐':'Documentary', '연예':'Show / Game show', '스포츠':'Sports', '홈쇼핑':'Advertisement / Shopping'}
     contentType = ''
     for key, value in contentTypeDict.items():
-        if category.startswith(key):
+        if key in category:
             contentType = value
     print('  <programme start="%s +0900" stop="%s +0900" channel="%s">' % (startTime, endTime, ChannelId))
     print('    <title lang="kr">%s</title>' % (programName))
@@ -469,17 +985,16 @@ def writeProgram(programdata):
             print('    <credits>')
             if actors:
                 for actor in actors.split(','):
-                    if actor: print('      <actor>%s</actor>' % (actor))
+                    if actor.strip(): print('      <actor>%s</actor>' % (actor.strip()))
             if producers:
                 for producer in producers.split(','):
-                    if producer: print('      <producer>%s</producer>' % (producer))
+                    if producer.strip(): print('      <producer>%s</producer>' % (producer).strip())
             print('    </credits>')
-
     if category: print('    <category lang="kr">%s</category>' % (category))
     if contentType: print('    <category lang="en">%s</category>' % (contentType))
-    if episode: print('    <episode-num system="onscreen">%s</episode-num>' % (episode))
+    if episode: print('    <episode-num system="xmltv_ns">%s</episode-num>' % (episode_ns))
+    if episode: print('    <episode-num system="onscreen">%s</episode-num>' % (episode_on))
     if rebroadcast: print('    <previously-shown />')
-
     if rating:
         print('    <rating system="KMRB">')
         print('      <value>%s</value>' % (rating))
@@ -492,12 +1007,29 @@ def printLog(*args):
 def printError(*args):
     print("Error : ", *args, file=sys.stderr)
 
+def replacement(match, tag):
+    if not(match is None):
+        tag = tag.strip()
+        programName = unescape(match.group(1)).replace('<','&lt;').replace('>','&gt;').strip()
+        programName = '<'+ tag + ' class="title">' + programName + '</' + tag + '>'
+        return programName
+    else:
+        return '';
+
+def pairs(it):
+    it = iter(it)
+    prev = next(it)
+    for v in it:
+        yield prev, v
+        prev = v
+
 Settingfile = os.path.dirname(os.path.abspath(__file__)) + '/epg2xml.json'
 ChannelInfos = []
 try:
-    with open(Settingfile, encoding='utf8') as f: # Read Channel Information file
-        Settings = json.load(f)
+    with open(Settingfile) as f: # Read Channel Information file
+        Settings = json.load(f, encoding="utf-8")
         MyISP = Settings['MyISP'] if 'MyISP' in Settings else ''
+        MyChannels = Settings['MyChannels'] if 'MyChannels' in Settings else ''
         default_output = Settings['output'] if 'output' in Settings else ''
         default_xml_file = Settings['default_xml_file'] if 'default_xml_file' in Settings else 'xmltv.xml'
         default_xml_socket = Settings['default_xml_socket'] if 'default_xml_socket' in Settings else 'xmltv.sock'
@@ -506,15 +1038,13 @@ try:
         default_rebroadcast = Settings['default_rebroadcast'] if 'default_rebroadcast' in Settings else ''
         default_episode = Settings['default_episode'] if 'default_episode' in Settings else ''
         default_verbose = Settings['default_verbose'] if 'default_verbose' in Settings else ''
-
 except EnvironmentError:
     printError("epg2xml." + JSON_FILE_ERROR)
     sys.exit()
 except ValueError as e:
-    printError(e)
+    print(e)
     printError("epg2xml." + JSON_SYNTAX_ERROR)
     sys.exit()
-
 
 parser = argparse.ArgumentParser(description = 'EPG 정보를 출력하는 방법을 선택한다')
 argu1 = parser.add_argument_group(description = 'IPTV 선택')
@@ -608,6 +1138,7 @@ if default_fetch_limit :
         sys.exit()
     else :
         period = int(default_fetch_limit)
+        if period > 2 : period = 2
 else :
     printError("epg2xml.json 파일의 default_fetch_limit항목이 없습니다.");
     sys.exit()
@@ -623,7 +1154,7 @@ elif output == "socket" :
         try:
             sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             sock.connect(default_xml_socket)
-            sockfile = sock.makefile('w+')
+            sockfile = sock.makefile('w')
             sys.stdout = sockfile
         except socket.error:
             printError(SOCKET_ERROR)
